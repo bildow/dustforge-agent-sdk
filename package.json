@@ -1,0 +1,24 @@
+{
+  "name": "dustforge-agent-sdk",
+  "version": "0.1.0",
+  "description": "SDK for AI agents to self-onboard to Dustforge — cryptographic identity, email, and wallet. GET https://dustforge.com/.well-known/silicon",
+  "main": "index.js",
+  "scripts": {},
+  "keywords": [
+    "ai-agent",
+    "identity",
+    "did-key",
+    "silicon",
+    "agent-onboarding",
+    "dustforge",
+    "llm",
+    "autonomous-agent"
+  ],
+  "author": "Civitasvox",
+  "license": "MIT",
+  "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bildow/agent-onboarding"
+  }
+}
