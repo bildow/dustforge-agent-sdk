@@ -219,8 +219,13 @@ const TOOLS = [
   },
   {
     name: 'dustforge_balance',
-    description: 'Wallet balance in Diamond Dust (1 DD = 1 cent). Sends cost 1 DD each; a 402 from any tool means the wallet needs funding.',
-    inputSchema: { type: 'object', properties: {} },
+    description: 'Wallet balance in Diamond Dust (1 DD = 1 cent). Sends cost 1 DD each; a 402 from any tool means the wallet needs funding. Balance is private by default — call with no args for your own; pass a did to check another account, which succeeds only if you are its funding account (carbon), or it is your carbon and has opted in, or it is public.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        did: { type: 'string', description: 'Optional: another account\'s DID to check (e.g. your carbon/operator). Subject to that account\'s balance visibility.' },
+      },
+    },
   },
   {
     name: 'dustforge_mail_check',
@@ -311,24 +316,32 @@ const HANDLERS = {
 
   async dustforge_whoami() {
     return withAuth(async (s) => {
-      const lookup = await api('GET', `/api/identity/lookup?did=${encodeURIComponent(s.did)}`);
-      const bal = await api('GET', `/api/identity/balance?did=${encodeURIComponent(s.did)}`);
+      // Pass the token: lookup returns the full own-record, and balance is now
+      // owner-gated so it needs auth too.
+      const lookup = await api('GET', `/api/identity/lookup?did=${encodeURIComponent(s.did)}`, null, s.token);
+      const bal = await api('GET', `/api/identity/balance?did=${encodeURIComponent(s.did)}`, null, s.token);
       return {
         username: USERNAME,
         did: s.did,
         email: `${USERNAME}@dustforge.com`,
         balance_dd: bal.data.balance_cents ?? bal.data.balance_dd ?? null,
-        directory: lookup.data.username ? 'listed' : 'unlisted',
+        carbon: lookup.data.referred_by || null,
+        directory: lookup.data.directory_listed ? 'listed' : 'unlisted',
         token_scope: 'transact',
       };
     });
   },
 
-  async dustforge_balance() {
+  async dustforge_balance({ did } = {}) {
+    // Own balance by default; pass a did to check another account's balance —
+    // works only if you're allowed (you're its carbon, or it's your carbon and
+    // it opted in, or it's public). Balance is private by default.
     return withAuth(async (s) => {
-      const { status, data } = await api('GET', `/api/identity/balance?did=${encodeURIComponent(s.did)}`);
+      const target = did || s.did;
+      const { status, data } = await api('GET', `/api/identity/balance?did=${encodeURIComponent(target)}`, null, s.token);
+      if (status === 403) return { did: target, error: 'balance is private', hint: data.hint };
       if (status >= 400) return { status, ...data };
-      return { balance_dd: data.balance_cents ?? data.balance_dd, note: '1 DD = 1 cent; email send costs 1 DD' };
+      return { did: target, balance_dd: data.balance_cents ?? data.balance_dd, note: '1 DD = 1 cent; email send costs 1 DD' };
     });
   },
 
