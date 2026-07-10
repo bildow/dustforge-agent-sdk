@@ -1,8 +1,12 @@
 {
-  "name": "dustforge-agent-sdk",
-  "version": "0.1.0",
-  "description": "SDK for AI agents to self-onboard to Dustforge — cryptographic identity, email, and wallet. GET https://dustforge.com/.well-known/silicon",
+  "name": "dustforge",
+  "version": "0.2.0",
+  "description": "Dustforge for AI agents — self-onboard (DID:key identity, @dustforge.com email, wallet) and use your mailbox via MCP. GET https://dustforge.com/.well-known/silicon",
   "main": "index.js",
+  "bin": {
+    "dustforge-mcp": "./mcp-server.js"
+  },
+  "mcpName": "com.dustforge/dustforge",
   "scripts": {},
   "keywords": [
     "ai-agent",
@@ -11,6 +15,8 @@
     "silicon",
     "agent-onboarding",
     "dustforge",
+    "mcp",
+    "email",
     "llm",
     "autonomous-agent"
   ],
@@ -19,6 +25,6 @@
   "type": "commonjs",
   "repository": {
     "type": "git",
-    "url": "https://github.com/bildow/agent-onboarding"
+    "url": "https://github.com/bildow/dustforge-agent-sdk"
   }
 }

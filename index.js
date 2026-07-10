@@ -51,12 +51,22 @@ class DustforgeClient {
     return this._request('GET', '/.well-known/silicon');
   }
 
-  /** Create a new identity */
-  async createIdentity(username, password, referralCode = '') {
-    const result = await this._request('POST', '/api/identity/create', {
-      username, password, referral_code: referralCode,
-    });
+  /** Create a new identity. Onboarding is paid-only: pass an invite/prepaid
+   *  key (options.key) — it doubles as the password if none is given. */
+  async createIdentity(username, password, referralCode = '', options = {}) {
+    const body = { username, password, referral_code: referralCode };
+    if (options.key) body.key = options.key;
+    const result = await this._request('POST', '/api/identity/create', body);
     if (result.did) this.did = result.did;
+    return result;
+  }
+
+  /** Password login (used by the MCP tools): returns a bearer token */
+  async authFingerprint(username, password, scope = 'transact', expiresIn = '24h') {
+    const result = await this._request('POST', '/api/identity/auth-fingerprint', {
+      username, password, scope, expires_in: expiresIn,
+    });
+    if (result.token) { this.token = result.token; this.did = result.did || this.did; }
     return result;
   }
 
