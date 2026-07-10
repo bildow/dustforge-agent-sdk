@@ -325,7 +325,7 @@ const HANDLERS = {
         did: s.did,
         email: `${USERNAME}@dustforge.com`,
         balance_dd: bal.data.balance_cents ?? bal.data.balance_dd ?? null,
-        carbon: lookup.data.referred_by || null,
+        referred_by: lookup.data.referred_by || null, // who shoulder-tapped you in (referral analytics only — NOT an access relationship)
         directory: lookup.data.directory_listed ? 'listed' : 'unlisted',
         token_scope: 'transact',
       };
