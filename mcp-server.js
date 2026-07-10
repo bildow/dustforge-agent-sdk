@@ -41,6 +41,33 @@ const JMAP_BASE = process.env.DUSTFORGE_JMAP_URL || 'http://100.83.112.88:8090';
 const USERNAME = process.env.DUSTFORGE_USERNAME || '';
 const PASSWORD = process.env.DUSTFORGE_PASSWORD || '';
 
+const path = require('path');
+const os = require('os');
+const ENV_FILE = process.env.DUSTFORGE_ENV_FILE || path.join(os.homedir(), '.config/dustforge-mcp.env');
+
+// The refresh token is the credential the Dustforge API side runs on (device-
+// grant or auth-fingerprint issues it; each use rotates it). It is persisted
+// back to the env file so it survives across sessions. NOTE: the Stalwart
+// mailbox (JMAP) still authenticates with the account password directly — a
+// refresh token can't ride JMAP basic-auth — so mail_check/mail_read need
+// DUSTFORGE_PASSWORD regardless. Shrinking that to a mailbox-only app-password
+// is a documented follow-up.
+let refreshToken = process.env.DUSTFORGE_REFRESH_TOKEN || '';
+
+// Set/replace a single KEY=value in the 600 env file, preserving other lines.
+function persistEnv(key, value) {
+  const fs = require('fs');
+  let lines = [];
+  try { lines = fs.readFileSync(ENV_FILE, 'utf8').split('\n'); } catch (_) {}
+  let found = false;
+  lines = lines.map((l) => {
+    if (new RegExp(`^\\s*${key}\\s*=`).test(l)) { found = true; return `${key}=${value}`; }
+    return l;
+  }).filter((l, i, a) => !(l === '' && i === a.length - 1));
+  if (!found) lines.push(`${key}=${value}`);
+  try { fs.writeFileSync(ENV_FILE, lines.join('\n') + '\n', { mode: 0o600 }); } catch (_) {}
+}
+
 // ---------------------------------------------------------------------------
 // HTTP helpers (Node 18+ global fetch)
 // ---------------------------------------------------------------------------
@@ -64,9 +91,28 @@ async function api(method, path, body = null, token = null) {
 let session = { token: null, did: null, at: 0 };
 const TOKEN_TTL_MS = 20 * 3600 * 1000; // refresh before the 24h token dies
 
+// Adopt an access+refresh token pair from any grant (refresh, password, or the
+// device flow). The rotated refresh token is written back to the env file.
+function adoptSession(data) {
+  session = { token: data.token, did: data.did, at: Date.now() };
+  if (data.refresh_token) { refreshToken = data.refresh_token; persistEnv('DUSTFORGE_REFRESH_TOKEN', refreshToken); }
+  return session;
+}
+
 async function login() {
+  // Preferred path: a stored refresh token (OAuth-style). No password needed;
+  // single-use, rotates on every call, and is independently revocable.
+  if (refreshToken) {
+    const { status, data } = await api('POST', '/api/identity/refresh', {
+      refresh_token: refreshToken, expires_in: '24h',
+    });
+    if (status < 400 && data.token) return adoptSession(data);
+    // stale/revoked refresh — drop it and fall through to password (if any)
+    refreshToken = '';
+  }
+  // Fallback: password login (also mints a refresh token we then adopt).
   if (!USERNAME || !PASSWORD) {
-    throw new Error('DUSTFORGE_USERNAME / DUSTFORGE_PASSWORD not configured — onboard first (dustforge_onboard), then set the env file.');
+    throw new Error('No valid refresh token and DUSTFORGE_USERNAME/PASSWORD not set — run dustforge_authorize (device grant) or onboard first.');
   }
   const { status, data } = await api('POST', '/api/identity/auth-fingerprint', {
     username: USERNAME, password: PASSWORD, scope: 'transact', expires_in: '24h',
@@ -74,8 +120,7 @@ async function login() {
   if (status >= 400 || !data.token) {
     throw new Error(`login failed (${status}): ${data.error || 'no token returned'}`);
   }
-  session = { token: data.token, did: data.did, at: Date.now() };
-  return session;
+  return adoptSession(data);
 }
 
 async function withAuth(fn) {
@@ -155,6 +200,19 @@ const TOOLS = [
     },
   },
   {
+    name: 'dustforge_authorize',
+    description: 'OAuth-style device-grant login (RFC 8628), like the Claude Code first-run browser approval. Call with NO arguments to START: you get a short user_code and a URL — an operator opens the URL, signs in, and approves the code. Then call again with the returned device_code to FINISH: the tool receives a refresh token (no password shared) and stores it for future sessions. The minted session belongs to whichever identity APPROVES the request (the approver\'s scope is the ceiling) — so to authorize a session that acts as this account, approve while signed in as this account.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        device_code: { type: 'string', description: 'From the START call — provide it to FINISH (poll for approval).' },
+        agent_label: { type: 'string', description: 'Label shown to the approver (e.g. "claude-code session on flimflam"). START only.' },
+        scope: { type: 'string', description: 'Requested scope (read/write/transact/admin). Default transact. START only.' },
+        poll_seconds: { type: 'integer', description: 'FINISH: how long to wait for approval before returning (default 60, max 150).' },
+      },
+    },
+  },
+  {
     name: 'dustforge_whoami',
     description: 'Who am I on Dustforge: username, DID, email address, wallet balance (Diamond Dust). Verifies the configured credentials actually authenticate.',
     inputSchema: { type: 'object', properties: {} },
@@ -214,6 +272,41 @@ const HANDLERS = {
       referral_code: data.referral_code,
       note: 'Store the password in the MCP env file (DUSTFORGE_USERNAME/DUSTFORGE_PASSWORD) and in the DemiPass vault — the other tools authenticate with it.',
     };
+  },
+
+  async dustforge_authorize({ device_code, agent_label, scope = 'transact', poll_seconds = 60 } = {}) {
+    // START — no device_code yet: request one and hand the user_code to a human.
+    if (!device_code) {
+      const { status, data } = await api('POST', '/api/identity/device/code', {
+        agent_label: agent_label || 'dustforge MCP session', scope,
+      });
+      if (status >= 400) throw new Error(`device/code failed (${status}): ${data.error || JSON.stringify(data)}`);
+      return {
+        step: 'approve_then_finish',
+        user_code: data.user_code,
+        approve_at: data.verification_url_complete || data.verification_url,
+        expires_in_seconds: data.expires_in,
+        device_code: data.device_code,
+        instructions: `Open ${data.verification_url_complete || data.verification_url} and approve code ${data.user_code} while signed in as the identity this session should act as. Then call dustforge_authorize again with device_code="${data.device_code}".`,
+      };
+    }
+    // FINISH — poll device/token until approved/denied/expired.
+    const deadline = Date.now() + Math.min(Number(poll_seconds) || 60, 150) * 1000;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { status, data } = await api('POST', '/api/identity/device/token', { device_code });
+      if (status === 200 && data.token) {
+        adoptSession(data);
+        return { ok: true, authorized_as: data.did, scope: data.scope, auth_method: 'device', note: 'Refresh token stored — future sessions use it (no password).' };
+      }
+      if (status === 428) { // authorization_pending
+        if (Date.now() >= deadline) return { step: 'still_pending', device_code, note: 'Not approved yet. Approve the code, then call dustforge_authorize again with this device_code.' };
+        await new Promise((r) => setTimeout(r, 5000));
+        continue;
+      }
+      if (status === 403) throw new Error('access_denied — the operator denied this request.');
+      throw new Error(`device/token failed (${status}): ${data.error || JSON.stringify(data)}`);
+    }
   },
 
   async dustforge_whoami() {
