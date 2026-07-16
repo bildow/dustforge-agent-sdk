@@ -41,6 +41,14 @@ const JMAP_BASE = process.env.DUSTFORGE_JMAP_URL || 'http://100.83.112.88:8090';
 const USERNAME = process.env.DUSTFORGE_USERNAME || '';
 const PASSWORD = process.env.DUSTFORGE_PASSWORD || '';
 
+// Multi-terminal project lanes. All lane addresses (<project>.<user>@dustforge.com)
+// are aliases on the ONE shared mailbox, so every terminal can read across lanes;
+// each terminal defaults to its own project lane via DUSTFORGE_PROJECT.
+const PROJECT = (process.env.DUSTFORGE_PROJECT || '').toLowerCase().trim();
+const LANES = ['dustforge', 'demipass', 'kodiak', 'brain', '11ov3', 'ops'];
+function laneAddress(p) { return `${p}.${USERNAME}@dustforge.com`; }
+function isAllLane(l) { return !l || l === '*' || l === 'all'; }
+
 const path = require('path');
 const os = require('os');
 const ENV_FILE = process.env.DUSTFORGE_ENV_FILE || path.join(os.homedir(), '.config/dustforge-mcp.env');
@@ -229,14 +237,20 @@ const TOOLS = [
   },
   {
     name: 'dustforge_mail_check',
-    description: 'Check the agent\'s @dustforge.com inbox. Returns newest messages: id, from, subject, received, unread, preview. Use dustforge_mail_read with an id for the full body.',
+    description: 'Check the shared @dustforge.com mailbox, scoped to a PROJECT LANE. By default reads this terminal\'s own lane (its DUSTFORGE_PROJECT); pass folder to read another project\'s lane, or folder:"*" to read across every lane. A lane is mail addressed to <project>.<user>@dustforge.com. Returns newest messages: id, from, to, subject, received, unread, preview.',
     inputSchema: {
       type: 'object',
       properties: {
+        folder: { type: 'string', description: 'Project lane to read (e.g. dustforge, kodiak, brain, 11ov3, ops). Default = this terminal\'s lane. "*" or "all" = across every lane.' },
         limit: { type: 'integer', description: 'Max messages to return (default 10, max 50)' },
         unread_only: { type: 'boolean', description: 'Only unread messages (default false)' },
       },
     },
+  },
+  {
+    name: 'dustforge_mail_folders',
+    description: 'List the project lanes in the shared mailbox with total + unread counts per lane, and which lane this terminal owns. Use to see cross-project activity at a glance.',
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'dustforge_mail_read',
@@ -257,6 +271,7 @@ const TOOLS = [
         subject: { type: 'string', description: 'Subject line' },
         body: { type: 'string', description: 'Message body' },
         format: { type: 'string', description: '"text" (default) or "html"' },
+        from_project: { type: 'string', description: 'Send from a project lane address (<project>.<user>@dustforge.com) so replies return to that lane. Default = this terminal\'s DUSTFORGE_PROJECT.' },
       },
       required: ['to', 'subject', 'body'],
     },
@@ -345,24 +360,55 @@ const HANDLERS = {
     });
   },
 
-  async dustforge_mail_check({ limit = 10, unread_only = false } = {}) {
+  async dustforge_mail_check({ limit = 10, unread_only = false, folder } = {}) {
     const ctx = await jmapSession();
+    // Lane = the project folder to read. Defaults to this terminal's DUSTFORGE_PROJECT;
+    // '*'/'all' reads across every lane (the whole mailbox).
+    const lane = (folder !== undefined ? String(folder).toLowerCase().trim() : PROJECT);
+    const exact = isAllLane(lane) ? null : laneAddress(lane).toLowerCase();
+    const cap = Math.min(Number(limit) || 10, 50);
+    // Stalwart's JMAP `to` filter is TOKENIZED (word-based), so it can't isolate a
+    // lane (every lane shares "dustforge.com"). Fetch a wider window and filter to
+    // the EXACT recipient address client-side.
     const filter = unread_only ? { notKeyword: '$seen' } : undefined;
     const responses = await jmapCall([
-      ['Email/query', {
-        accountId: ctx.accountId,
-        filter,
-        sort: [{ property: 'receivedAt', isAscending: false }],
-        limit: Math.min(Number(limit) || 10, 50),
-      }, 'q'],
-      ['Email/get', {
-        accountId: ctx.accountId,
-        '#ids': { resultOf: 'q', name: 'Email/query', path: '/ids' },
-        properties: ['from', 'subject', 'receivedAt', 'preview', 'keywords'],
-      }, 'g'],
+      ['Email/query', { accountId: ctx.accountId, filter, sort: [{ property: 'receivedAt', isAscending: false }], limit: exact ? 200 : cap }, 'q'],
+      ['Email/get', { accountId: ctx.accountId, '#ids': { resultOf: 'q', name: 'Email/query', path: '/ids' }, properties: ['from', 'to', 'subject', 'receivedAt', 'preview', 'keywords'] }, 'g'],
     ]);
-    const list = responses.find(([n, , t]) => n === 'Email/get' && t === 'g')[1].list || [];
-    return { address: `${USERNAME}@dustforge.com`, count: list.length, messages: list.map(summarize) };
+    let list = responses.find(([n, , t]) => n === 'Email/get' && t === 'g')[1].list || [];
+    if (exact) list = list.filter(m => (m.to || []).some(a => (a.email || '').toLowerCase() === exact));
+    list = list.slice(0, cap);
+    return {
+      lane: isAllLane(lane) ? 'all' : lane,
+      address: isAllLane(lane) ? `${USERNAME}@dustforge.com` : laneAddress(lane),
+      count: list.length,
+      messages: list.map(summarize),
+    };
+  },
+
+  async dustforge_mail_folders() {
+    const ctx = await jmapSession();
+    // Scan recent messages' To headers and count per lane by EXACT address (the
+    // JMAP `to` filter is tokenized, so calculateTotal per-lane over-counts).
+    const resp = await jmapCall([
+      ['Email/query', { accountId: ctx.accountId, sort: [{ property: 'receivedAt', isAscending: false }], limit: 500 }, 'q'],
+      ['Email/get', { accountId: ctx.accountId, '#ids': { resultOf: 'q', name: 'Email/query', path: '/ids' }, properties: ['to', 'keywords'] }, 'g'],
+    ]);
+    const msgs = (resp.find(([, , t]) => t === 'g') || [null, {}])[1].list || [];
+    const count = {}; LANES.forEach(p => (count[p] = { total: 0, unread: 0 }));
+    for (const m of msgs) {
+      const unread = !(m.keywords || {})['$seen'];
+      for (const p of LANES) {
+        if ((m.to || []).some(a => (a.email || '').toLowerCase() === laneAddress(p).toLowerCase())) {
+          count[p].total++; if (unread) count[p].unread++;
+        }
+      }
+    }
+    return {
+      your_lane: PROJECT || '(unset — set DUSTFORGE_PROJECT)',
+      mailbox_scanned: msgs.length,
+      lanes: LANES.map(p => ({ project: p, address: laneAddress(p), ...count[p] })),
+    };
   },
 
   async dustforge_mail_read({ id }) {
@@ -393,12 +439,15 @@ const HANDLERS = {
     };
   },
 
-  async dustforge_mail_send({ to, subject, body, format = 'text' }) {
+  async dustforge_mail_send({ to, subject, body, format = 'text', from_project } = {}) {
     return withAuth(async (s) => {
-      const { status, data } = await api('POST', '/api/email/send', { to, subject, body, format }, s.token);
+      // Send from this terminal's lane address so replies return to the lane.
+      const proj = from_project !== undefined ? String(from_project).toLowerCase().trim() : PROJECT;
+      const from = isAllLane(proj) ? undefined : laneAddress(proj);
+      const { status, data } = await api('POST', '/api/email/send', { to, subject, body, format, from }, s.token);
       if (status === 402) throw new Error(`payment required: wallet has insufficient Diamond Dust (${JSON.stringify(data)})`);
       if (status >= 400) throw new Error(`send failed (${status}): ${data.error || JSON.stringify(data)}`);
-      return { ok: true, to, subject, cost_dd: 1, ...data };
+      return { ok: true, from: from || `${USERNAME}@dustforge.com`, to, subject, cost_dd: 1, ...data };
     });
   },
 };
