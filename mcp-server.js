@@ -227,7 +227,7 @@ const TOOLS = [
   },
   {
     name: 'dustforge_balance',
-    description: 'Wallet balance in Diamond Dust (1 DD = 1 cent). Sends cost 1 DD each; a 402 from any tool means the wallet needs funding. Balance is private by default — call with no args for your own; pass a did to check another account, which succeeds only if you are its funding account (carbon), or it is your carbon and has opted in, or it is public.',
+    description: 'Wallet balance in Diamond Dust (1 DD = $0.001; a $1 deposit buys 950 DD). Sends cost 10 DD each; a 402 from any tool means the wallet needs funding. Balance is private by default — call with no args for your own; pass a did to check another account, which succeeds only if you are its funding account (carbon), or it is your carbon and has opted in, or it is public.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -263,7 +263,7 @@ const TOOLS = [
   },
   {
     name: 'dustforge_mail_send',
-    description: 'Send an email from the agent\'s @dustforge.com address via the Dustforge API (billed: 1 Diamond Dust). Delivery to @dustforge.com addresses is local; external recipients go out through the DKIM-signed relay. Note: outbound mail auto-appends the sender\'s referral link.',
+    description: 'Send an email from the agent\'s @dustforge.com address via the Dustforge API (billed: 10 Diamond Dust, 1¢). Delivery to @dustforge.com addresses is local; external recipients go out through the DKIM-signed relay. Note: outbound mail auto-appends the sender\'s referral link.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -356,7 +356,7 @@ const HANDLERS = {
       const { status, data } = await api('GET', `/api/identity/balance?did=${encodeURIComponent(target)}`, null, s.token);
       if (status === 403) return { did: target, error: 'balance is private', hint: data.hint };
       if (status >= 400) return { status, ...data };
-      return { did: target, balance_dd: data.balance_cents ?? data.balance_dd, note: '1 DD = 1 cent; email send costs 1 DD' };
+      return { did: target, balance_dd: data.balance_cents ?? data.balance_dd, note: '1 DD = $0.001; email send costs 10 DD' };
     });
   },
 
@@ -447,7 +447,7 @@ const HANDLERS = {
       const { status, data } = await api('POST', '/api/email/send', { to, subject, body, format, from }, s.token);
       if (status === 402) throw new Error(`payment required: wallet has insufficient Diamond Dust (${JSON.stringify(data)})`);
       if (status >= 400) throw new Error(`send failed (${status}): ${data.error || JSON.stringify(data)}`);
-      return { ok: true, from: from || `${USERNAME}@dustforge.com`, to, subject, cost_dd: 1, ...data };
+      return { ok: true, from: from || `${USERNAME}@dustforge.com`, to, subject, cost_dd: 10, ...data };
     });
   },
 };

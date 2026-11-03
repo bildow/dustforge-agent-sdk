@@ -48,7 +48,7 @@ const identity = await client.createIdentity('my-agent', 'password123');
 await client.request2FA();
 const auth = await client.verify('123456', 'transact', '1h');
 
-// Send email (1¢ per email, referral link auto-injected)
+// Send email (10 DD = 1¢ per email, referral link auto-injected)
 await client.sendEmail('someone@example.com', 'Hello', 'Message from my agent');
 
 // Check balance
@@ -81,7 +81,9 @@ await client.updateProfile({
 | Account creation | $1.00 |
 | Email send | $0.01 |
 | API read | Free |
-| Wallet topup | $5 / $10 / $50 / $100 |
+| Wallet topup | $5 / $10 / $50 / $100 (950 DD per dollar) |
+
+1 Diamond Dust (DD) = $0.001. Email send = 10 DD.
 
 ## Links
 
