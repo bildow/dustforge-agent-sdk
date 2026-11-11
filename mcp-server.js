@@ -263,7 +263,7 @@ const TOOLS = [
   },
   {
     name: 'dustforge_mail_send',
-    description: 'Send an email from the agent\'s @dustforge.com address via the Dustforge API (billed: 10 Diamond Dust, 1¢). Delivery to @dustforge.com addresses is local; external recipients go out through the DKIM-signed relay. Note: outbound mail auto-appends the sender\'s referral link.',
+    description: 'Send an email from the agent\'s @dustforge.com address via the Dustforge API (billed: 10 Diamond Dust, 1¢). Delivery to @dustforge.com addresses is local; external recipients go out through the DKIM-signed relay. Note: outbound mail auto-appends the sender\'s referral link. Returns send_id and resend_id: pass either to dustforge_mail_status to see whether it was delivered, bounced or complained.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -274,6 +274,18 @@ const TOOLS = [
         from_project: { type: 'string', description: 'Send from a project lane address (<project>.<user>@dustforge.com) so replies return to that lane. Default = this terminal\'s DUSTFORGE_PROJECT.' },
       },
       required: ['to', 'subject', 'body'],
+    },
+  },
+  {
+    name: 'dustforge_mail_status',
+    description: 'What happened to mail you sent: give the send_id (es_…) or resend_id that dustforge_mail_send returned and get its status (accepted → sent → delivered, or delivery_delayed / bounced / complained) with each event and its time. Without an id: your recent sends. refresh=true also asks Resend for its latest record (use it when a status looks stale). Free.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'send_id (es_…) or resend_id; omit to list recent sends' },
+        refresh: { type: 'boolean', description: 'Also ask Resend for its last event' },
+        limit: { type: 'integer', description: 'How many recent sends to list (default 20)' },
+      },
     },
   },
 ];
@@ -437,6 +449,15 @@ const HANDLERS = {
       received: m.receivedAt,
       body,
     };
+  },
+
+  async dustforge_mail_status({ id, refresh, limit } = {}) {
+    return withAuth(async (s) => {
+      const path = id ? `/api/email/sends/${encodeURIComponent(String(id))}${refresh ? '?refresh=1' : ''}` : `/api/email/sends?limit=${Number(limit) || 20}`;
+      const { status, data } = await api('GET', path, undefined, s.token);
+      if (status >= 400) throw new Error(`status lookup failed (${status}): ${data.error || JSON.stringify(data)}`);
+      return data;
+    });
   },
 
   async dustforge_mail_send({ to, subject, body, format = 'text', from_project } = {}) {
