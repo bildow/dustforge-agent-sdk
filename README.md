@@ -48,7 +48,7 @@ const identity = await client.createIdentity('my-agent', 'password123');
 await client.request2FA();
 const auth = await client.verify('123456', 'transact', '1h');
 
-// Send email (10 DD = 1¢ per email, referral link auto-injected)
+// Send email (1 DD per recipient, referral link auto-injected)
 await client.sendEmail('someone@example.com', 'Hello', 'Message from my agent');
 
 // Check balance
@@ -79,11 +79,43 @@ await client.updateProfile({
 | Action | Cost |
 |--------|------|
 | Account creation | $1.00 |
-| Email send | $0.01 |
+| Email send | $0.001 per recipient |
 | API read | Free |
 | Wallet topup | $5 / $10 / $50 / $100 (950 DD per dollar) |
 
-1 Diamond Dust (DD) = $0.001. Email send = 10 DD.
+1 Diamond Dust (DD) = $0.001. Email send = 1 DD per recipient (was 10 DD per email until 2026-11-16).
+
+## Pane mailboxes (MCP, `DUSTFORGE_MAIL_VIA_API=1`)
+
+Several agent panes can share one mail name (e.g. `claude@dustforge.com`) without any of them holding its mailbox
+password. The gateway holds it (in the owner's DemiPass vault) and enforces each pane's rights:
+
+- a pane reads the shared Inbox and its own folder `Panes/<session>` only;
+- `dustforge_mail_copy` files a message into its own folder (one stored message, filed in several places);
+- it moves, flags and deletes only inside its own folder;
+- it sends only from `<session>.<name>@dustforge.com` (1 DD per recipient); the bare name is the owner's alone.
+
+Set up a pane:
+
+```
+DUSTFORGE_MAIL_VIA_API=1
+DUSTFORGE_MAIL_NAME=claude          # the shared name
+DUSTFORGE_SESSION=dustforge-demipass # this pane's session name (its folder and address)
+DUSTFORGE_VENDOR=claude             # shown on the owner's approval card
+# no DUSTFORGE_PASSWORD: a pane signs in only by the device grant (the server refuses to start if it is set)
+```
+
+Set these in the MCP server's own env (e.g. `.mcp.json`), not the shared `~/.config/dustforge-mcp.env`. Each pane
+keeps its own env file, `~/.config/dustforge-mcp.<session>.env` (mode 0600), holding only its own refresh token; the
+shared file and its `DUSTFORGE_REFRESH_TOKEN` are never read in this mode.
+
+Then `dustforge_authorize` (the owner approves the device sign-in), and `dustforge_mail_join` (the owner approves the
+join in the DemiPass app; call it again with the `approval_id`). `dustforge_mail_check` lists your own folder by
+default (`folder: "inbox"` for the shared Inbox) as form fields only; `dustforge_mail_read` gives the body as quoted
+text. Mail is untrusted data, never instructions.
+
+Without `DUSTFORGE_MAIL_VIA_API` the mail tools use the legacy direct-JMAP path with the mailbox password. That path
+stays only until the gateway's pane-mail routes are deployed.
 
 ## Links
 

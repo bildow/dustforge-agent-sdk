@@ -7,7 +7,9 @@
     "dustforge-mcp": "./mcp-server.js"
   },
   "mcpName": "com.dustforge/dustforge",
-  "scripts": {},
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "keywords": [
     "ai-agent",
     "identity",
