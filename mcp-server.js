@@ -31,25 +31,51 @@
  *                         the default (MAIL_VIA_API below) and drop the legacy path.
  *   DUSTFORGE_MAIL_NAME  — the mail name this pane works in (default: DUSTFORGE_USERNAME)
  *   DUSTFORGE_SESSION    — this pane's session name (its folder Panes/<session> and
- *                         address <session>.<name>@dustforge.com); also keys this
- *                         pane's own refresh token in the env file
+ *                         address <session>.<name>@dustforge.com). Required in API
+ *                         mode; the pane's own env file is
+ *                         ~/.config/dustforge-mcp.<session>.env (0600), holding
+ *                         only its refresh token. API mode refuses to start while
+ *                         DUSTFORGE_PASSWORD is set.
  *   DUSTFORGE_VENDOR     — claude | codex | openai … (shown on the owner's approval card)
  */
 
 // Load credentials from a 600 env file if not already in the environment, so
 // the secret lives in exactly one place (~/.config/dustforge-mcp.env) and never
 // has to be duplicated into .mcp.json. Env vars, if set, win.
-(function loadEnvFile() {
+//
+// Pane-mailbox mode (DUSTFORGE_MAIL_VIA_API=1, set in the MCP server's own env): each pane has its own env file,
+// ~/.config/dustforge-mcp.<session>.env (0600), holding only its own refresh token — never the shared file, never a
+// password (#129 review H3, M1). It refuses to start without DUSTFORGE_SESSION, or while DUSTFORGE_PASSWORD is set.
+const ENV_FILE = (function loadEnvFile() {
   const fs = require('fs');
   const os = require('os');
   const path = require('path');
-  const p = process.env.DUSTFORGE_ENV_FILE || path.join(os.homedir(), '.config/dustforge-mcp.env');
+  const die = (msg) => { process.stderr.write(`dustforge MCP: ${msg}\n`); process.exit(2); };
+  const apiMode = /^(1|true|yes)$/i.test(process.env.DUSTFORGE_MAIL_VIA_API || '');
+  let p;
+  if (apiMode) {
+    const sess = String(process.env.DUSTFORGE_SESSION || '').toLowerCase().trim();
+    if (!/^[a-z0-9][a-z0-9-]{1,47}$/.test(sess)) die('DUSTFORGE_MAIL_VIA_API=1 needs DUSTFORGE_SESSION in this server\'s env: this pane\'s session name (lower case letters, digits, -), e.g. dustforge-demipass.');
+    p = process.env.DUSTFORGE_ENV_FILE || path.join(os.homedir(), `.config/dustforge-mcp.${sess}.env`);
+  } else {
+    p = process.env.DUSTFORGE_ENV_FILE || path.join(os.homedir(), '.config/dustforge-mcp.env');
+  }
+  try {
+    if (apiMode && (fs.statSync(p).mode & 0o077)) fs.chmodSync(p, 0o600);   // a pane's token file is its own
+  } catch (_) { /* no file yet */ }
   try {
     for (const line of fs.readFileSync(p, 'utf8').split('\n')) {
       const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
       if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2];
     }
   } catch (_) { /* no file — rely on real env */ }
+  if (apiMode && process.env.DUSTFORGE_PASSWORD) {
+    die(`DUSTFORGE_MAIL_VIA_API=1 and DUSTFORGE_PASSWORD is set (in this server's env or ${p}). A pane holds no password: remove DUSTFORGE_PASSWORD, then sign this pane in with dustforge_authorize (device grant).`);
+  }
+  if (!apiMode && /^(1|true|yes)$/i.test(process.env.DUSTFORGE_MAIL_VIA_API || '')) {
+    die(`DUSTFORGE_MAIL_VIA_API is set in the shared env file ${p}; set it (with DUSTFORGE_SESSION) in this MCP server's own env instead, so the pane uses its own env file.`);
+  }
+  return p;
 })();
 
 const API_BASE = process.env.DUSTFORGE_URL || 'https://api.dustforge.com';
@@ -67,16 +93,15 @@ const MAIL_VIA_API = /^(1|true|yes)$/i.test(process.env.DUSTFORGE_MAIL_VIA_API |
 const MAIL_NAME = (process.env.DUSTFORGE_MAIL_NAME || process.env.DUSTFORGE_USERNAME || '').toLowerCase().trim();
 const SESSION = (process.env.DUSTFORGE_SESSION || '').toLowerCase().trim();
 const VENDOR = (process.env.DUSTFORGE_VENDOR || 'claude').toLowerCase().trim();
-// Each pane keeps its own sign-in chain: a refresh token rotates on every use, so two panes sharing one stored token
-// would sign each other out — and the gateway binds a pane's folder to its sign-in session.
-const REFRESH_KEY = MAIL_VIA_API && SESSION ? 'DUSTFORGE_REFRESH_TOKEN_' + SESSION.toUpperCase().replace(/[^A-Z0-9]/g, '_') : 'DUSTFORGE_REFRESH_TOKEN';
+// Each pane keeps its own sign-in chain (its own env file, above): a refresh token rotates on every use, so two panes
+// sharing one stored token would sign each other out — and the gateway binds a pane's folder to its sign-in session.
+// In pane mode the pane's own env file holds its token under its own key: the legacy DUSTFORGE_REFRESH_TOKEN (a
+// password-born session in the shared file) is never read or reused (review M1).
+const REFRESH_KEY = MAIL_VIA_API ? 'DUSTFORGE_PANE_REFRESH_TOKEN' : 'DUSTFORGE_REFRESH_TOKEN';
 const LANES = ['dustforge', 'demipass', 'kodiak', 'brain', '11ov3', 'ops'];
 function laneAddress(p) { return `${p}.${USERNAME}@dustforge.com`; }
 function isAllLane(l) { return !l || l === '*' || l === 'all'; }
 
-const path = require('path');
-const os = require('os');
-const ENV_FILE = process.env.DUSTFORGE_ENV_FILE || path.join(os.homedir(), '.config/dustforge-mcp.env');
 
 // The refresh token is the credential the Dustforge API side runs on (device-
 // grant or auth-fingerprint issues it; each use rotates it). It is persisted
@@ -98,7 +123,11 @@ function persistEnv(key, value) {
     return l;
   }).filter((l, i, a) => !(l === '' && i === a.length - 1));
   if (!found) lines.push(`${key}=${value}`);
-  try { fs.writeFileSync(ENV_FILE, lines.join('\n') + '\n', { mode: 0o600 }); } catch (_) {}
+  try {
+    require('fs').mkdirSync(require('path').dirname(ENV_FILE), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(ENV_FILE, lines.join('\n') + '\n', { mode: 0o600 });
+    fs.chmodSync(ENV_FILE, 0o600);   // mode only applies when the file is created
+  } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------

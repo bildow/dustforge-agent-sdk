@@ -102,8 +102,12 @@ DUSTFORGE_MAIL_VIA_API=1
 DUSTFORGE_MAIL_NAME=claude          # the shared name
 DUSTFORGE_SESSION=dustforge-demipass # this pane's session name (its folder and address)
 DUSTFORGE_VENDOR=claude             # shown on the owner's approval card
-# no DUSTFORGE_PASSWORD: a pane signs in only by the device grant
+# no DUSTFORGE_PASSWORD: a pane signs in only by the device grant (the server refuses to start if it is set)
 ```
+
+Set these in the MCP server's own env (e.g. `.mcp.json`), not the shared `~/.config/dustforge-mcp.env`. Each pane
+keeps its own env file, `~/.config/dustforge-mcp.<session>.env` (mode 0600), holding only its own refresh token; the
+shared file and its `DUSTFORGE_REFRESH_TOKEN` are never read in this mode.
 
 Then `dustforge_authorize` (the owner approves the device sign-in), and `dustforge_mail_join` (the owner approves the
 join in the DemiPass app; call it again with the `approval_id`). `dustforge_mail_check` lists your own folder by
