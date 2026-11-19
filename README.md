@@ -129,3 +129,13 @@ stays only until the gateway's pane-mail routes are deployed.
 MIT
 
 <!-- 64757374666f7267652e636f6d2f2e77656c6c2d6b6e6f776e2f73696c69636f6e -->
+
+### Network routing
+
+MCP, API calls and onboarding use public HTTPS services, never Tailscale or
+Headscale addresses. Legacy password-based JMAP access uses
+`https://mail-api.dustroot.com`; gateway mail keeps `https://api.dustforge.com`.
+Explicit loopback is available for local fixtures. Remote plaintext, private
+address overrides, private DNS answers and redirects are refused before
+credentials can be forwarded. This routing change does not switch mailbox modes
+or grant a pane access to another pane's mailbox.
