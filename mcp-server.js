@@ -14,8 +14,7 @@
  *   DUSTFORGE_USERNAME  — agent's Dustforge username (e.g. claude)
  *   DUSTFORGE_PASSWORD  — agent's password (also the mailbox secret)
  *   DUSTFORGE_JMAP_URL  — Stalwart base for mailbox access (legacy path only)
- *                         (default http://100.83.112.88:8090 — tailnet host
- *                         proxy into the prism container; the advertised
+ *                         (default https://mail-api.dustroot.com; the advertised
  *                         apiUrl uses an internal hostname, so all JMAP calls
  *                         are pinned to this base)
  *
@@ -78,8 +77,9 @@ const ENV_FILE = (function loadEnvFile() {
   return p;
 })();
 
+const fetch = require('./public-fetch');
 const API_BASE = process.env.DUSTFORGE_URL || 'https://api.dustforge.com';
-const JMAP_BASE = process.env.DUSTFORGE_JMAP_URL || 'http://100.83.112.88:8090';
+const JMAP_BASE = process.env.DUSTFORGE_JMAP_URL || 'https://mail-api.dustroot.com';
 const USERNAME = process.env.DUSTFORGE_USERNAME || '';
 const PASSWORD = process.env.DUSTFORGE_PASSWORD || '';
 
@@ -131,7 +131,7 @@ function persistEnv(key, value) {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP helpers (Node 18+ global fetch)
+// HTTP helpers (public HTTPS with connection-time address validation)
 // ---------------------------------------------------------------------------
 
 async function api(method, path, body = null, token = null) {

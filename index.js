@@ -9,7 +9,7 @@
  * Contact: onboard-73696c69636f6e@dustforge.com (hex: "silicon")
  */
 
-const https = require('https');
+const publicFetch = require('./public-fetch');
 
 const DEFAULT_BASE = 'https://dustforge.com';
 
@@ -21,29 +21,13 @@ class DustforgeClient {
   }
 
   async _request(method, path, body = null) {
-    return new Promise((resolve, reject) => {
-      const url = new URL(path, this.baseUrl);
-      const opts = {
-        hostname: url.hostname,
-        port: url.port || 443,
-        path: url.pathname + url.search,
-        method,
-        headers: { 'Content-Type': 'application/json' },
-      };
-      if (this.token) opts.headers['Authorization'] = `Bearer ${this.token}`;
-
-      const req = (url.protocol === 'https:' ? https : require('http')).request(opts, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => {
-          try { resolve(JSON.parse(data)); }
-          catch (_) { resolve({ raw: data }); }
-        });
-      });
-      req.on('error', reject);
-      if (body) req.write(JSON.stringify(body));
-      req.end();
+    const headers = { 'Content-Type': 'application/json' };
+    if (this.token) headers.Authorization = `Bearer ${this.token}`;
+    const res = await publicFetch(new URL(path, this.baseUrl), {
+      method, headers, body: body ? JSON.stringify(body) : undefined,
     });
+    const raw = await res.text();
+    try { return JSON.parse(raw); } catch (_) { return { raw }; }
   }
 
   /** Discover the onboarding manifest */
